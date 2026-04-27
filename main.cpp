@@ -1,6 +1,7 @@
 #include <GL/freeglut.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>   // 用于生成随机种子
 
 // --- 全局状态变量 ---
 float rotateX = 30.0f; // 整体绕X轴旋转角度
@@ -10,8 +11,11 @@ float translateY = 0.0f; // 整体Y轴平移
 // --- 旋转动画状态控制 ---
 int isAnimating = 0;      // 是否正在播放旋转动画 (0=否, 1=是)
 float currentAngle = 0.0f;// 当前旋转角度 (0 到 90)
+int animAxis = 0;         // 【新增】当前旋转轴：0代表X轴, 1代表Y轴, 2代表Z轴
 int animLayer = 1;        // 正在旋转的层 (例如 x=1 代表右侧面)
 int animDir = 1;          // 旋转方向 (1 或 -1)
+
+int scrambleMovesLeft = 0; // 【新增】剩余的自动打乱步数
 
 // --- 单个小方块的数据结构 ---
 typedef struct {
@@ -22,6 +26,8 @@ typedef struct {
 Cubie cube[27];           // 存放27个方块的数组
 
 GLuint textureID; // 保存载入的纹理ID
+
+void triggerRandomRotation();
 
 // --- BMP 读取函数 (简化版 24-bit BMP 载入) ---
 GLuint loadBMP(const char* imagepath) {
@@ -127,7 +133,7 @@ void display() {
 
     float spacing = 2.1f; // 方块之间的间距
 
-    // 启用纹理 (如果在本地放了BMP文件，取消下面的注释)
+    // 启用纹理
      glEnable(GL_TEXTURE_2D);
      glBindTexture(GL_TEXTURE_2D, textureID);
 
@@ -151,12 +157,27 @@ void display() {
     for (int i = 0; i < 27; i++) {
     glPushMatrix(); // 保存大魔方坐标系
     
-    // 1. 检查这个方块是否属于当前正在旋转的层
+   /* // 1. 检查这个方块是否属于当前正在旋转的层
     // 这里以绕 X 轴旋转（右侧面或左侧面）为例
     if (isAnimating && cube[i].cx == animLayer) {
         // 先做全局旋转，这会让方块绕着魔方中心点“公转”
         glRotatef(currentAngle * animDir, 1.0f, 0.0f, 0.0f); 
-    }
+    }*/
+
+    // 1. 检查这个方块是否属于当前正在旋转的面
+        int isRotatingCube = 0;
+        if (isAnimating) {
+            if (animAxis == 0 && cube[i].cx == animLayer) isRotatingCube = 1;
+            if (animAxis == 1 && cube[i].cy == animLayer) isRotatingCube = 1;
+            if (animAxis == 2 && cube[i].cz == animLayer) isRotatingCube = 1;
+        }
+
+        // 2. 如果属于旋转面，执行对应的公转
+        if (isRotatingCube) {
+            if (animAxis == 0) glRotatef(currentAngle * animDir, 1.0f, 0.0f, 0.0f);
+            if (animAxis == 1) glRotatef(currentAngle * animDir, 0.0f, 1.0f, 0.0f);
+            if (animAxis == 2) glRotatef(currentAngle * animDir, 0.0f, 0.0f, 1.0f);
+        }
 
     // 2. 将方块平移到它当前的逻辑位置
     glTranslatef(cube[i].cx * spacing, cube[i].cy * spacing, cube[i].cz * spacing);
@@ -187,7 +208,16 @@ void keyboard(unsigned char key, int x, int y) {
                 animLayer = 1;  // x = 1 的那一层 (右侧面)
                 animDir = 1;    // 顺时针
             }
+        case '1': // 按数字键 1：仅仅随机转动 1 次
+            if (!isAnimating) triggerRandomRotation();
             break;
+        case 'm': // 按字母键 M (Magic Scramble)：连续自动随机打乱 20 次！
+            if (!isAnimating) {
+                scrambleMovesLeft = 20; 
+                triggerRandomRotation();
+            }
+            break;
+            
         case 27: exit(0); break;             // ESC退出
     }
     glutPostRedisplay(); // 触发重绘
@@ -211,6 +241,7 @@ void init() {
     
     // 加载纹理 (请确保你的项目目录下有一个名为 texture.bmp 的图片，大小最好是 256x256 或 512x512)
      textureID = loadBMP("texture.bmp"); 
+     srand((unsigned)time(NULL));
 }
 
 // 初始化27个方块的状态
@@ -272,8 +303,85 @@ void finalizeRotationX() {
     }
 }
 
-// 定时器函数：处理旋转动画帧
+// 完成任意轴图层旋转的逻辑和矩阵更新
+void finalizeRotationGeneral() {
+    for (int i = 0; i < 27; i++) {
+        int oldX = cube[i].cx;
+        int oldY = cube[i].cy;
+        int oldZ = cube[i].cz;
+
+        // --- X 轴旋转 (左右面) ---
+        if (animAxis == 0 && oldX == animLayer) {
+            cube[i].cy = -oldZ * animDir;
+            cube[i].cz =  oldY * animDir;
+            glPushMatrix();
+            glLoadIdentity();
+            glRotatef(90.0f * animDir, 1.0f, 0.0f, 0.0f);
+            glMultMatrixf(cube[i].rotMat);
+            glGetFloatv(GL_MODELVIEW_MATRIX, cube[i].rotMat);
+            glPopMatrix();
+        }
+        // --- Y 轴旋转 (上下面) ---
+        else if (animAxis == 1 && oldY == animLayer) {
+            cube[i].cx =  oldZ * animDir;
+            cube[i].cz = -oldX * animDir;
+            glPushMatrix();
+            glLoadIdentity();
+            glRotatef(90.0f * animDir, 0.0f, 1.0f, 0.0f);
+            glMultMatrixf(cube[i].rotMat);
+            glGetFloatv(GL_MODELVIEW_MATRIX, cube[i].rotMat);
+            glPopMatrix();
+        }
+        // --- Z 轴旋转 (前后面) ---
+        else if (animAxis == 2 && oldZ == animLayer) {
+            cube[i].cx = -oldY * animDir;
+            cube[i].cy =  oldX * animDir;
+            glPushMatrix();
+            glLoadIdentity();
+            glRotatef(90.0f * animDir, 0.0f, 0.0f, 1.0f);
+            glMultMatrixf(cube[i].rotMat);
+            glGetFloatv(GL_MODELVIEW_MATRIX, cube[i].rotMat);
+            glPopMatrix();
+        }
+    }
+}
+
+// 触发一次随机旋转
+void triggerRandomRotation() {
+    if (!isAnimating) {
+        animAxis = rand() % 3;                   // 随机选 X(0), Y(1), Z(2) 轴
+        animLayer = (rand() % 2 == 0) ? 1 : -1;  // 随机选正负层 (屏蔽中间层)
+        animDir = (rand() % 2 == 0) ? 1 : -1;    // 随机选顺/逆时针方向
+
+        isAnimating = 1;
+        currentAngle = 0.0f;
+    }
+}
+
+// 替换之前的 timerUpdate 定时器函数
 void timerUpdate(int value) {
+    if (isAnimating) {
+        // 这里的 10.0f 控制动画转动速度，数字越大转得越快
+        currentAngle += 10.0f; 
+        
+        if (currentAngle >= 90.0f) {
+            currentAngle = 0.0f;
+            isAnimating = 0;
+            finalizeRotationGeneral(); // 旋转结束，固化数据
+            
+            // 【核心连招逻辑】：如果还需要打乱，立刻触发下一次
+            if (scrambleMovesLeft > 0) {
+                scrambleMovesLeft--;
+                triggerRandomRotation();
+            }
+        }
+        glutPostRedisplay();
+    }
+    glutTimerFunc(16, timerUpdate, 0); 
+}
+
+// 定时器函数：处理旋转动画帧
+/*void timerUpdate(int value) {
     if (isAnimating) {
         currentAngle += 5.0f; // 每次旋转 5 度，控制动画速度
         
@@ -286,7 +394,7 @@ void timerUpdate(int value) {
         glutPostRedisplay(); // 触发重绘
     }
     glutTimerFunc(16, timerUpdate, 0); // 约 60FPS 循环调用
-}
+}*/
 
 int main(int argc, char** argv) {
     glutInit(&argc, argv);
